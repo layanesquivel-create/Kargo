@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>KARGO Bot v3</title>
+<style>
+ body{margin:0;font-family:Segoe UI,Arial;background:#0b141a;display:flex;justify-content:center}
+ #phone{width:100%;max-width:480px;display:flex;flex-direction:column;height:100vh}
+ header{background:#1f2c34;color:#e9edef;padding:12px;display:flex;gap:10px;align-items:center}
+ .ava{width:42px;height:42px;border-radius:50%;background:#d4af37;display:flex;align-items:center;justify-content:center;font-size:22px}
+ #aikey{margin:6px 10px;background:#2a3942;border:1px solid #d4af37;color:#e9edef;border-radius:8px;padding:8px;font-size:12px}
+ #chat{flex:1;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:8px}
+ .msg{max-width:82%;padding:9px 12px;border-radius:10px;font-size:14px;line-height:1.45;white-space:pre-line}
+ .bot{background:#1f2c34;color:#e9edef;align-self:flex-start}
+ .user{background:#005c4b;color:#e9edef;align-self:flex-end}
+ .chips{display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start}
+ .chip{background:#005c4b;color:#fff;border:none;border-radius:16px;padding:9px 14px;cursor:pointer;font-size:13px}
+ #bar{display:flex;gap:8px;padding:10px;background:#1f2c34}
+ #input{flex:1;background:#2a3942;border:none;border-radius:20px;padding:12px;color:#e9edef;font-size:14px}
+ #send{background:#d4af37;border:none;border-radius:50%;width:46px;height:46px;font-size:18px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="phone">
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v3 anti-bloqueo</small></div></header>
+ <input id="aikey" placeholder="(Opcional) API Key gratis de Gemini → entiende CUALQUIER mensaje"/>
+ <div id="chat"></div>
+ <div id="bar"><input id="input" placeholder="Ej: del prado a obrajes"/><button id="send">➤</button></div>
+</div>
+<script>
+const TARIFAS=[[1,9],[2,13],[3,16],[4,20],[5,23],[6,26],[7,30],[8,33],[9,36],[10,40],[15,55],[20,65]];
+const KM_EXTRA=2, ESPERA={0:0,5:2,10:4,20:7};
+const LUGARES={
+ "estadio hernando siles":["Estadio Hernando Siles, La Paz",[-16.4918,-68.1194],'P'],
+ "hernando siles":["Estadio Hernando Siles, La Paz",[-16.4918,-68.1194],'P'],
+ "estadio":["Estadio Hernando Siles, La Paz",[-16.4918,-68.1194],'P'],
+ "siles":["Estadio Hernando Siles, La Paz",[-16.4918,-68.1194],'P'],
+ "stadium":["Estadio Hernando Siles, La Paz",[-16.4918,-68.1194],'P'],
+ "piscina olimpica":["Piscina Olímpica de Alto Obrajes, La Paz",[-16.5265,-68.1245],'P'],
+ "piscina":["Piscina Olímpica de Alto Obrajes, La Paz",[-16.5265,-68.1245],'P'],
+ "plaza murillo":["Plaza Murillo, La Paz",[-16.4955,-68.1336],'P'],
+ "plaza espana":["Plaza España, La Paz",[-16.5060,-68.1290],'P'],
+ "plaza abaroa":["Plaza Abaroa, La Paz",[-16.5090,-68.1330],'P'],
+ "terminal":["Terminal de Buses, La Paz",[-16.4827,-68.1411],'P'],
+ "aeropuerto":["Aeropuerto Internacional El Alto",[-16.5133,-68.1923],'P'],
+ "el prado":["El Prado, La Paz",[-16.4965,-68.1336],'Z'],
+ "prado":["El Prado, La Paz",[-16.4965,-68.1336],'Z'],
+ "sopocachi":["Sopocachi, La Paz",[-16.5065,-68.1355],'Z'],
+ "alto obrajes":["Alto Obrajes, La Paz",[-16.5260,-68.1250],'Z'],
+ "obrajes":["Obrajes, La Paz",[-16.5345,-68.1290],'Z'],
+ "miraflores":["Miraflores, La Paz",[-16.4895,-68.1195],'Z'],
+ "san miguel":["San Miguel, La Paz",[-16.5230,-68.1210],'Z'],
+ "calacoto":["Calacoto, La Paz",[-16.5330,-68.1100],'Z'],
+ "achumani":["Achumani, La Paz",[-16.5430,-68.1030],'Z'],
+ "cota cota":["Cota Cota, La Paz",[-16.5270,-68.1140],'Z'],
+ "irpavi":["Irpavi, La Paz",[-16.5170,-68.1130],'Z'],
+ "san jorge":["San Jorge, La Paz",[-16.5020,-68.1370],'Z'],
+ "tembladerani":["Tembladerani, La Paz",[-16.5120,-68.1410],'Z'],
+ "zona sur":["Zona Sur, La Paz",[-16.5300,-68.1150],'Z'],
+ "el alto":["El Alto, La Paz",[-16.5070,-68.1660],'Z'],
+ "la ceja":["La Ceja, El Alto",[-16.5070,-68.1660],'Z'],
+ "satelite":["Ciudad Satélite, El Alto",[-16.4710,-68.1480],'Z'],
+ "villa adela":["Villa Adela, La Paz",[-16.5170,-68.1480],'Z']
+};
+
+const $=id=>document.getElementById(id), chat=$('chat');
+let cot=null, busy=false;
+const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const esNocturno=()=>{const h=new Date().getHours();return h>=22||h<6;};
+function addMsg(t,q){const d=document.createElement('div');d.className='msg '+q;d.textContent=t;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
+function clearChips(){document.querySelectorAll('.chips').forEach(c=>c.remove());}
+function addChips(l){clearChips();const c=document.createElement('div');c.className='chips';l.forEach(([t,f])=>{const b=document.createElement('button');b.className='chip';b.textContent=t;b.onclick=()=>{c.remove();f();};c.appendChild(b);});chat.appendChild(c);chat.scrollTop=chat.scrollHeight;}
+
+/* 🔒 CONEXIÓN CON TIEMPO LÍMITE: nunca se congela */
+async function fetchT(url,opts={},ms=9000){
+ const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);
+ try{const r=await fetch(url,{...opts,signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.json();}
+ finally{clearTimeout(t);}
+}
+
+function extraer(texto){
+ const t=norm(texto);
+ const syn=Object.entries(LUGARES).map(([k,v])=>({k:norm(k),v})).sort((a,b)=>b.k.length-a.k.length);
+ const usados=[],enc=[];
+ for(const s of syn){let i=t.indexOf(s.k);
+  while(i>=0){const f=i+s.k.length;
+   if(!usados.some(([ui,uf])=>i<uf&&f>ui)){usados.push([i,f]);enc.push({idx:i,k:s.k,v:s.v});}
+   i=t.indexOf(s.k,i+1);}}
+ enc.sort((a,b)=>a.idx-b.idx);
+ if(enc.length<2)return null;
+ const m=t.match(/\s(a|hasta)\s/);
+ const mejor=a=>a.sort((x,y)=>(x.v[2]==='P'?0:1)-(y.v[2]==='P'?0:1)||y.k.length-x.k.length)[0];
+ if(m){const O=enc.filter(e=>e.idx<=m.index),D=enc.filter(e=>e.idx>m.index);
+  if(O.length&&D.length)return[mejor(O),mejor(D)];}
+ return[enc[0],enc[1]];
+}
+
+const cache={};
+async function resolver(v){
+ if(cache[v[0]])return cache[v[0]];
+ let r=null;
+ try{
+  const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(v[0]+', Bolivia')}`);
+  if(d.length)r={c:[parseFloat(d[0].lat),parseFloat(d[0].lon)],exact:true};
+ }catch(e){}
+ if(!r)r={c:v[1],exact:false};
+ cache[v[0]]=r;return r;
+}
+async function iaExtraer(texto,key){
+ const p=`Extrae origen y destino de este delivery en La Paz, Bolivia. Responde SOLO JSON {"origen":"...","destino":"..."}. Mensaje: "${texto}"`;
+ const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}]})});
+ return JSON.parse(d.candidates[0].content.parts[0].text.match(/\{.*\}/s)[0]);
+}
+async function rutaKm(a,b){
+ try{
+  const d=await fetchT(`https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=false`);
+  if(d.routes&&d.routes.length)return d.routes[0].distance/1000;
+ }catch(e){}
+ const R=6371,dl=(b[0]-a[0])*Math.PI/180,dg=(b[1]-a[1])*Math.PI/180;
+ const s=Math.sin(dl/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dg/2)**2;
+ return 2*R*Math.asin(Math.sqrt(s))*1.3; /* 🪂 paracaídas: recta ×1.3 */
+}
+function tarifaKm(km){for(const[l,p]of TARIFAS)if(km<=l)return p;return 65+Math.ceil(km-20)*KM_EXTRA;}
+
+function mostrarCot(){
+ const pe=ESPERA[cot.espera]||0,noche=esNocturno();
+ let total=cot.base+pe;if(noche)total=Math.round(total*1.2);
+ addMsg(`🧾 COTIZACIÓN KARGO\n${cot.precision}\n📍 ${cot.nO} → 🏁 ${cot.nD}\n📏 Distancia: ${cot.km.toFixed(1)} km\n🚦 Ruta: ${cot.base} Bs\n⏱ Espera (${cot.espera} min): +${pe} Bs${noche?'\n🌙 Nocturno +20%':''}\n💰 TOTAL: ${total} Bs`,'bot');
+ addChips([
+  ['✅ Confirmar',()=>{addMsg('✅ Confirmar','user');addMsg('¡Pedido registrado! 🛵\n(En producción: aquí se notifica a tus drivers)','bot');}],
+  ['⏱ +10 min espera',()=>{addMsg('⏱ +10 min espera','user');cot.espera=10;mostrarCot();}],
+  ['🔁 Otra cotización',()=>{addMsg('🔁 Otra cotización','user');addMsg('Dale, ¿de dónde a dónde? 😊','bot');}]
+ ]);
+}
+
+async function procesar(texto){
+ if(busy){addMsg('⏳ Un segundo, sigo calculando…','bot');return;}
+ busy=true;clearChips();addMsg(texto,'user');
+ const t=addMsg('⌨️ …','bot');
+ try{
+  let o=null,d=null,nO='',nD='',exact=false;
+  const par=extraer(texto);
+  if(par){
+   const[ro,rd]=await Promise.all([resolver(par[0].v),resolver(par[1].v)]);
+   if(ro.c&&rd.c){o=ro.c;d=rd.c;exact=ro.exact&&rd.exact;nO=par[0].v[0];nD=par[1].v[0];}
+  }
+  if(!o){
+   const key=$('aikey').value.trim();
+   if(key){
+    const j=await iaExtraer(texto,key);
+    if(j&&j.origen&&j.destino){
+     const ro=await resolver([j.origen+', La Paz',null,'P']);
+     const rd=await resolver([j.destino+', La Paz',null,'P']);
+     if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=ro.exact&&rd.exact;}
+    }
+   }
+  }
+  t.remove();
+  if(!o||!d){addMsg('🤔 No entendí las zonas. Ejemplo:\n"del prado a obrajes"\n"del stadium a la piscina olimpica"','bot');return;}
+  const tt=addMsg(`🛣️ Calculando ruta ${nO} → ${nD}…`,'bot');
+  const kmU=Math.round(await rutaKm(o,d)*10)/10;
+  tt.remove();
+  cot={km:kmU,base:tarifaKm(kmU),espera:0,nO,nD,precision:exact?'🎯 Puntos exactos':'📍 Aprox. por zona'};
+  mostrarCot();
+ }catch(e){
+  t.remove();
+  addMsg('😅 La conexión con el mapa falló por un momento.\nEscribe tu consulta de nuevo, ya estoy listo. 💪','bot');
+ }finally{busy=false;}
+}
+
+$('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
+$('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
+addMsg('¡Hola! 👋 Soy el bot KARGO v3 🛵\nYa no me congelo: prueba varias rutas seguidas.\n"del stadium de Miraflores a la piscina olímpica de alto obrajes"','bot');
+</script>
+</body>
+</html>
