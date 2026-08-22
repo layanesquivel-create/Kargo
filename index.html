@@ -22,9 +22,9 @@
 </head>
 <body>
 <div id="phone">
- <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v8</small></div></header>
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small id="status">en línea · bot v8</small></div></header>
  <div id="chat"></div>
- <div id="bar"><input id="input" placeholder="Ej: obrajes calle 18 a plaza san pedro"/><button id="send">➤</button></div>
+ <div id="bar"><input id="input" placeholder="Ej: plaza uyuni a plaza sucre"/><button id="send">➤</button></div>
 </div>
 <script>
 /* 👇 PEGA OTRA VEZ TU BASE64 ENTRE LAS COMILLAS */
@@ -44,6 +44,7 @@ const LUGARES={
  "plaza abaroa":["Plaza Abaroa, La Paz",[-16.5090,-68.1330],'P'],
  "plaza villarroel":["Plaza Villarroel, La Paz",[-16.4989,-68.1289],'P'],
  "plaza sucre":["Plaza Sucre, La Paz",[-16.4977,-68.1417],'P'],
+ "plaza uyuni":["Plaza Uyuni, La Paz",[-16.5060,-68.1310],'P'],
  "uyustus":["Uyustus, La Paz",[-16.4925,-68.1360],'P'],
  "terminal":["Terminal de Buses, La Paz",[-16.4827,-68.1411],'P'],
  "aeropuerto":["Aeropuerto Internacional El Alto",[-16.5133,-68.1923],'P'],
@@ -84,7 +85,6 @@ async function fetchT(url,opts={},ms=9000){
  finally{clearTimeout(t);}
 }
 function enLaPaz(c){return c&&c[0]>-16.65&&c[0]<-16.40&&c[1]>-68.32&&c[1]<-68.02;}
-/* 🗺️ Búsqueda AMARRADA a La Paz (viewbox+bounded) */
 async function geoc(q){
  try{
   const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=bo&bounded=1&viewbox=-68.32,-16.40,-68.02,-16.65&accept-language=es&q=${encodeURIComponent(q+', La Paz')}`);
@@ -122,7 +122,6 @@ function fragmentos(texto){
  if(!m)return null;
  return[m[1].trim(),m[2].trim()];
 }
-/* 🧠 Cerebro con 3 modelos de respaldo */
 async function iaGemini(t,key){
  const p=`Eres despachador de delivery en La Paz, Bolivia. Extrae origen y destino del mensaje (si falta uno, déjalo en ""). Normaliza nombres a lugares reales ("uyustus"→"Uyustus", "Villaroel"→"Plaza Villarroel", "c.21"→"Calle 21"). Incluye coordenadas aproximadas reales de La Paz (lat -16.65..-16.40, lng -68.32..-68.02). Responde SOLO JSON: {"origen":{"nombre":"...","lat":0.0,"lng":0.0},"destino":{"nombre":"...","lat":0.0,"lng":0.0}}. Mensaje: "${t}"`;
  for(const m of MODELS){
@@ -133,6 +132,17 @@ async function iaGemini(t,key){
   }catch(e){}
  }
  throw new Error('ia');
+}
+/* 🆕 Chequeo visible del cerebro */
+async function pingIA(){
+ if(!DEFAULT_KEY)return'⚠️ sin clave IA';
+ for(const m of MODELS){
+  try{
+   const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${DEFAULT_KEY}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:'Responde únicamente la palabra OK'}]}]})},8000);
+   if(d.candidates&&d.candidates.length)return`🧠 cerebro activo (${m})`;
+  }catch(e){}
+ }
+ return'❌ IA sin conexión · modo mapa+diccionario';
 }
 function lado(x){if(!x)return null;if(typeof x==='string')return{nombre:x,lat:null,lng:null};return{nombre:x.nombre||'',lat:x.lat!=null?parseFloat(x.lat):null,lng:x.lng!=null?parseFloat(x.lng):null};}
 async function resolverLado(L){
@@ -185,7 +195,6 @@ async function procesar(texto){
  busy=true;clearChips();addMsg(texto,'user');
  const t=addMsg('🧠 …','bot');
  try{
-  /* 🆕 Si quedó un origen pendiente, este mensaje es el destino */
   if(pending){
    const rd=await resolverTexto(texto);
    const P=pending;pending=null;t.remove();
@@ -234,9 +243,8 @@ async function resolver(v){
 }
 $('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
 $('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
-addMsg(DEFAULT_KEY
- ?'¡Hola! 👋 Soy el bot KARGO v8 🧠\nMapa amarrado a La Paz + cerebro con respaldo.\nSi escribes solo el origen, yo te pregunto el destino. 😊'
- :'⚠️ Falta pegar tu base64 en DEFAULT_KEY.');
+pingIA().then(s=>{$('status').textContent=s;});
+addMsg('¡Hola! 👋 Soy el bot KARGO v8 🧠\nMira arriba si el cerebro está activo.\nSi escribes solo el origen, yo te pregunto el destino. 😊');
 </script>
 </body>
 </html>
