@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>KARGO Bot v5</title>
+<title>KARGO Bot v6</title>
 <style>
  body{margin:0;font-family:Segoe UI,Arial;background:#0b141a;display:flex;justify-content:center}
  #phone{width:100%;max-width:480px;display:flex;flex-direction:column;height:100vh}
@@ -23,10 +23,10 @@
 </head>
 <body>
 <div id="phone">
- <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v5</small></div></header>
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v6</small></div></header>
  <input id="aikey" placeholder="(Opcional) Clave Gemini = refuerzo extra"/>
  <div id="chat"></div>
- <div id="bar"><input id="input" placeholder="Ej: de la camacho a la arce"/><button id="send">➤</button></div>
+ <div id="bar"><input id="input" placeholder="Ej: de la camacho a villa fátima"/><button id="send">➤</button></div>
 </div>
 <script>
 const TARIFAS=[[1,9],[2,13],[3,16],[4,20],[5,23],[6,26],[7,30],[8,33],[9,36],[10,40],[15,55],[20,65]];
@@ -61,12 +61,14 @@ const LUGARES={
  "el alto":["El Alto, La Paz",[-16.5070,-68.1660],'Z'],
  "la ceja":["La Ceja, El Alto",[-16.5070,-68.1660],'Z'],
  "satelite":["Ciudad Satélite, El Alto",[-16.4710,-68.1480],'Z'],
- "villa adela":["Villa Adela, La Paz",[-16.5170,-68.1480],'Z']
+ "villa adela":["Villa Adela, La Paz",[-16.5170,-68.1480],'Z'],
+ "villa fatima":["Villa Fátima, La Paz",[-16.4830,-68.1550],'Z']
 };
 
 const $=id=>document.getElementById(id), chat=$('chat');
 let cot=null, busy=false;
 const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esNocturno=()=>{const h=new Date().getHours();return h>=22||h<6;};
 function addMsg(t,q){const d=document.createElement('div');d.className='msg '+q;d.textContent=t;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
 function clearChips(){document.querySelectorAll('.chips').forEach(c=>c.remove());}
@@ -82,13 +84,24 @@ async function fetchTxt(url,ms=12000){
  try{const r=await fetch(url,{signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.text();}
  finally{clearTimeout(t);}
 }
-/* Solo acepta puntos dentro de La Paz/El Alto */
 function enLaPaz(c){return c&&c[0]>-16.65&&c[0]<-16.40&&c[1]>-68.32&&c[1]<-68.02;}
 async function geoc(q){
  try{
   const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q+', La Paz, Bolivia')}`);
   if(d.length){const c=[parseFloat(d[0].lat),parseFloat(d[0].lon)];if(enLaPaz(c))return{c,exact:true};}
  }catch(e){}
+ return{c:null,exact:false};
+}
+/* 🆕 v6: prueba hasta 4 formas del nombre, una por una (sin saturar) */
+async function geocMulti(frag){
+ const f=frag.trim();
+ const limpio=f.replace(/^(la|el|las|los|av\.?|avenida)\s+/,'');
+ const qs=[f,limpio,`Avenida ${limpio}`,`Calle ${limpio}`];
+ for(const q of qs){
+  const r=await geoc(q);
+  if(r.c)return r;
+  await sleep(350);
+ }
  return{c:null,exact:false};
 }
 
@@ -108,7 +121,6 @@ function extraer(texto){
   if(O.length&&D.length)return[mejor(O),mejor(D)];}
  return[enc[0],enc[1]];
 }
-/* 🆕 PLAN B: entiende "de X a Y" y busca X y Y en el mapa, sin IA */
 function fragmentos(texto){
  const t=norm(texto);
  const m=t.match(/(?:desde|del|de|se)\s+([a-z0-9\s\.]{3,40}?)\s+(?:a|hasta)\s+([a-z0-9\s\.]{3,40})/);
@@ -119,7 +131,7 @@ function fragmentos(texto){
 const cache={};
 async function resolver(v){
  if(cache[v[0]])return cache[v[0]];
- let r=await geoc(v[0]);
+ let r=await geocMulti(v[0]);
  if(!r.c)r={c:v[1],exact:false};
  cache[v[0]]=r;return r;
 }
@@ -165,13 +177,15 @@ async function procesar(texto){
   let o=null,d=null,nO='',nD='',exact=false;
   const par=extraer(texto);
   if(par){
-   const[ro,rd]=await Promise.all([resolver(par[0].v),resolver(par[1].v)]);
+   const ro=await resolver(par[0].v);
+   const rd=await resolver(par[1].v);
    if(ro.c&&rd.c){o=ro.c;d=rd.c;exact=ro.exact&&rd.exact;nO=par[0].v[0];nD=par[1].v[0];}
   }
   if(!o){
    const fr=fragmentos(texto);
    if(fr){
-    const[ro,rd]=await Promise.all([geoc(fr[0]),geoc(fr[1])]);
+    const ro=await geocMulti(fr[0]);
+    const rd=await geocMulti(fr[1]);
     if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=fr[0];nD=fr[1];exact=true;}
    }
   }
@@ -180,7 +194,8 @@ async function procesar(texto){
    try{j=await iaPollinations(texto);}catch(e){}
    if(!j){const key=$('aikey').value.trim();if(key){try{j=await iaGemini(texto,key);}catch(e){}}}
    if(j&&j.origen&&j.destino){
-    const[ro,rd]=await Promise.all([geoc(j.origen),geoc(j.destino)]);
+    const ro=await geocMulti(j.origen);
+    const rd=await geocMulti(j.destino);
     if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=true;}
    }
   }
@@ -199,7 +214,7 @@ async function procesar(texto){
 
 $('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
 $('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
-addMsg('¡Hola! 👋 Soy el bot KARGO v5 🛵\nAhora busco CUALQUIER calle o lugar en el mapa.\nPrueba: "cuanto de la camacho a la arce"','bot');
+addMsg('¡Hola! 👋 Soy el bot KARGO v6 🛵\nBusco calles y lugares con 4 formas de nombre.\nPrueba: "precio de la camacho a villa fatima"','bot');
 </script>
 </body>
 </html>
