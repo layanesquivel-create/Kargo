@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>KARGO Bot v7</title>
+<title>KARGO Bot v8</title>
 <style>
  body{margin:0;font-family:Segoe UI,Arial;background:#0b141a;display:flex;justify-content:center}
  #phone{width:100%;max-width:480px;display:flex;flex-direction:column;height:100vh}
@@ -22,13 +22,14 @@
 </head>
 <body>
 <div id="phone">
- <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v7 con cerebro IA</small></div></header>
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v8</small></div></header>
  <div id="chat"></div>
- <div id="bar"><input id="input" placeholder="Ej: de la plaza villaroel a la uyustus"/><button id="send">➤</button></div>
+ <div id="bar"><input id="input" placeholder="Ej: obrajes calle 18 a plaza san pedro"/><button id="send">➤</button></div>
 </div>
 <script>
-/* 👇 PEGA TU CLAVE DE GEMINI ENTRE LAS COMILLAS */
-const DEFAULT_KEY="QVEuQWI4Uk42SXRiZDFISXg1dk1zcVFYdWtocHpLZWF5V2pMbDl3SDhiRkxHTmRJSkIxNEE=";
+/* 👇 PEGA OTRA VEZ TU BASE64 ENTRE LAS COMILLAS */
+const DEFAULT_KEY=atob("QVEuQWI4Uk42SXRiZDFISXg1dk1zcVFYdWtocHpLZWF5V2pMbDl3SDhiRkxHTmRJSkIxNEE=");
+const MODELS=["gemini-2.5-flash","gemini-flash-latest","gemini-2.0-flash"];
 const TARIFAS=[[1,9],[2,13],[3,16],[4,20],[5,23],[6,26],[7,30],[8,33],[9,36],[10,40],[15,55],[20,65]];
 const KM_EXTRA=2, ESPERA={0:0,5:2,10:4,20:7};
 const LUGARES={
@@ -42,6 +43,7 @@ const LUGARES={
  "plaza espana":["Plaza España, La Paz",[-16.5060,-68.1290],'P'],
  "plaza abaroa":["Plaza Abaroa, La Paz",[-16.5090,-68.1330],'P'],
  "plaza villarroel":["Plaza Villarroel, La Paz",[-16.4989,-68.1289],'P'],
+ "plaza sucre":["Plaza Sucre, La Paz",[-16.4977,-68.1417],'P'],
  "uyustus":["Uyustus, La Paz",[-16.4925,-68.1360],'P'],
  "terminal":["Terminal de Buses, La Paz",[-16.4827,-68.1411],'P'],
  "aeropuerto":["Aeropuerto Internacional El Alto",[-16.5133,-68.1923],'P'],
@@ -63,11 +65,12 @@ const LUGARES={
  "la ceja":["La Ceja, El Alto",[-16.5070,-68.1660],'Z'],
  "satelite":["Ciudad Satélite, El Alto",[-16.4710,-68.1480],'Z'],
  "villa adela":["Villa Adela, La Paz",[-16.5170,-68.1480],'Z'],
- "villa fatima":["Villa Fátima, La Paz",[-16.4830,-68.1550],'Z']
+ "villa fatima":["Villa Fátima, La Paz",[-16.4830,-68.1550],'Z'],
+ "san pedro":["San Pedro, La Paz",[-16.4977,-68.1417],'Z']
 };
 
 const $=id=>document.getElementById(id), chat=$('chat');
-let cot=null, busy=false;
+let cot=null, busy=false, pending=null;
 const norm=s=>s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const esNocturno=()=>{const h=new Date().getHours();return h>=22||h<6;};
@@ -75,15 +78,16 @@ function addMsg(t,q){const d=document.createElement('div');d.className='msg '+q;
 function clearChips(){document.querySelectorAll('.chips').forEach(c=>c.remove());}
 function addChips(l){clearChips();const c=document.createElement('div');c.className='chips';l.forEach(([t,f])=>{const b=document.createElement('button');b.className='chip';b.textContent=t;b.onclick=()=>{c.remove();f();};c.appendChild(b);});chat.appendChild(c);chat.scrollTop=chat.scrollHeight;}
 
-async function fetchT(url,opts={},ms=12000){
+async function fetchT(url,opts={},ms=9000){
  const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);
  try{const r=await fetch(url,{...opts,signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.json();}
  finally{clearTimeout(t);}
 }
 function enLaPaz(c){return c&&c[0]>-16.65&&c[0]<-16.40&&c[1]>-68.32&&c[1]<-68.02;}
+/* 🗺️ Búsqueda AMARRADA a La Paz (viewbox+bounded) */
 async function geoc(q){
  try{
-  const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q+', La Paz, Bolivia')}`);
+  const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=bo&bounded=1&viewbox=-68.32,-16.40,-68.02,-16.65&accept-language=es&q=${encodeURIComponent(q+', La Paz')}`);
   if(d.length){const c=[parseFloat(d[0].lat),parseFloat(d[0].lon)];if(enLaPaz(c))return{c,exact:true};}
  }catch(e){}
  return{c:null,exact:false};
@@ -118,13 +122,36 @@ function fragmentos(texto){
  if(!m)return null;
  return[m[1].trim(),m[2].trim()];
 }
-/* 🧠 CEREBRO GEMINI: normaliza nombres y da coordenadas de respaldo */
+/* 🧠 Cerebro con 3 modelos de respaldo */
 async function iaGemini(t,key){
- const p=`Eres despachador de delivery en La Paz, Bolivia. Extrae origen y destino del mensaje. Normaliza nombres a lugares reales de mapas ("uyustus"→"Uyustus", "Villaroel"→"Plaza Villarroel"). Incluye coordenadas aproximadas reales de La Paz (lat -16.65..-16.40, lng -68.32..-68.02). Responde SOLO JSON: {"origen":{"nombre":"...","lat":0.0,"lng":0.0},"destino":{"nombre":"...","lat":0.0,"lng":0.0}}. Mensaje: "${t}"`;
- const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}]})});
- return JSON.parse(d.candidates[0].content.parts[0].text.match(/\{[\s\S]*\}/)[0]);
+ const p=`Eres despachador de delivery en La Paz, Bolivia. Extrae origen y destino del mensaje (si falta uno, déjalo en ""). Normaliza nombres a lugares reales ("uyustus"→"Uyustus", "Villaroel"→"Plaza Villarroel", "c.21"→"Calle 21"). Incluye coordenadas aproximadas reales de La Paz (lat -16.65..-16.40, lng -68.32..-68.02). Responde SOLO JSON: {"origen":{"nombre":"...","lat":0.0,"lng":0.0},"destino":{"nombre":"...","lat":0.0,"lng":0.0}}. Mensaje: "${t}"`;
+ for(const m of MODELS){
+  try{
+   const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}]})},8000);
+   const txt=d.candidates&&d.candidates[0].content.parts[0].text;
+   if(txt)return JSON.parse(txt.match(/\{[\s\S]*\}/)[0]);
+  }catch(e){}
+ }
+ throw new Error('ia');
 }
-function lado(x){if(!x)return null;if(typeof x==='string')return{nombre:x,lat:null,lng:null};return{nombre:x.nombre||'?',lat:x.lat!=null?parseFloat(x.lat):null,lng:x.lng!=null?parseFloat(x.lng):null};}
+function lado(x){if(!x)return null;if(typeof x==='string')return{nombre:x,lat:null,lng:null};return{nombre:x.nombre||'',lat:x.lat!=null?parseFloat(x.lat):null,lng:x.lng!=null?parseFloat(x.lng):null};}
+async function resolverLado(L){
+ let r=await geocMulti(L.nombre);
+ if(!r.c&&L.lat!=null&&enLaPaz([L.lat,L.lng]))r={c:[L.lat,L.lng],exact:false};
+ return r;
+}
+async function resolverTexto(t){
+ const r=await geocMulti(t);
+ if(r.c)return{c:r.c,exact:r.exact,nombre:t};
+ if(DEFAULT_KEY){
+  try{
+   const j=await iaGemini(`Lugar de destino: ${t}`,DEFAULT_KEY);
+   const D=lado(j.destino||j.origen);
+   if(D&&D.nombre){const rd=await resolverLado(D);if(rd.c)return{c:rd.c,exact:rd.exact,nombre:D.nombre};}
+  }catch(e){}
+ }
+ return null;
+}
 
 async function rutaKm(a,b){
  try{
@@ -147,12 +174,24 @@ function mostrarCot(){
   ['🔁 Otra cotización',()=>{addMsg('🔁 Otra cotización','user');addMsg('Dale, ¿de dónde a dónde? 😊','bot');}]
  ]);
 }
+async function finalizar(o,d,nO,nD,exact){
+ const kmU=Math.round(await rutaKm(o,d)*10)/10;
+ cot={km:kmU,base:tarifaKm(kmU),espera:0,nO,nD,precision:exact?'🎯 Puntos exactos':'🧠 Aprox. (IA/zona)'};
+ mostrarCot();
+}
 
 async function procesar(texto){
  if(busy){addMsg('⏳ Un segundo, sigo calculando…','bot');return;}
  busy=true;clearChips();addMsg(texto,'user');
  const t=addMsg('🧠 …','bot');
  try{
+  /* 🆕 Si quedó un origen pendiente, este mensaje es el destino */
+  if(pending){
+   const rd=await resolverTexto(texto);
+   const P=pending;pending=null;t.remove();
+   if(rd){await finalizar(P.c,rd.c,P.nombre,rd.nombre,P.exact&&rd.exact);return;}
+   addMsg('🤔 No encontré ese destino. Dime una referencia: "plaza sucre", "la uyustus"…','bot');return;
+  }
   let o=null,d=null,nO='',nD='',exact=false;
   const par=extraer(texto);
   if(par){
@@ -171,21 +210,18 @@ async function procesar(texto){
    try{j=await iaGemini(texto,DEFAULT_KEY);}catch(e){}
    if(j){
     const O=lado(j.origen),D=lado(j.destino);
-    if(O&&D){
-     let ro=await geocMulti(O.nombre),rd=await geocMulti(D.nombre);
-     if(!ro.c&&O.lat!=null&&enLaPaz([O.lat,O.lng]))ro={c:[O.lat,O.lng],exact:false};
-     if(!rd.c&&D.lat!=null&&enLaPaz([D.lat,D.lng]))rd={c:[D.lat,D.lng],exact:false};
-     if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=O.nombre;nD=D.nombre;exact=ro.exact&&rd.exact;}
+    if(O&&O.nombre){
+     const ro=await resolverLado(O);
+     let rd=null;
+     if(D&&D.nombre)rd=await resolverLado(D);
+     if(ro.c&&rd&&rd.c){o=ro.c;d=rd.c;nO=O.nombre;nD=D.nombre;exact=ro.exact&&rd.exact;}
+     else if(ro.c){pending={c:ro.c,exact:ro.exact,nombre:O.nombre};t.remove();addMsg(`📍 Origen: ${O.nombre} ✔\n¿Hasta dónde enviamos? 🏁`,'bot');return;}
     }
    }
   }
   t.remove();
   if(!o||!d){addMsg('🤔 No encontré esos lugares.\nPrueba: "de la camacho a la arce" · "del prado a obrajes"','bot');return;}
-  const tt=addMsg(`🛣️ Calculando ruta ${nO} → ${nD}…`,'bot');
-  const kmU=Math.round(await rutaKm(o,d)*10)/10;
-  tt.remove();
-  cot={km:kmU,base:tarifaKm(kmU),espera:0,nO,nD,precision:exact?'🎯 Puntos exactos':'🧠 Aprox. (IA/zona)'};
-  mostrarCot();
+  await finalizar(o,d,nO,nD,exact);
  }catch(e){
   t.remove();
   addMsg('😅 Falló la conexión un momento. Escribe tu consulta de nuevo. 💪','bot');
@@ -199,8 +235,8 @@ async function resolver(v){
 $('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
 $('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
 addMsg(DEFAULT_KEY
- ?'¡Hola! 👋 Soy el bot KARGO v7 🧠\nCon cerebro IA: entiendo hasta "uyustus".\nPrueba: "de la plaza villaroel a la uyustus"'
- :'¡Hola! 👋 Soy el bot KARGO v7 🛵\n⚠️ Falta pegar la clave Gemini en DEFAULT_KEY.');
+ ?'¡Hola! 👋 Soy el bot KARGO v8 🧠\nMapa amarrado a La Paz + cerebro con respaldo.\nSi escribes solo el origen, yo te pregunto el destino. 😊'
+ :'⚠️ Falta pegar tu base64 en DEFAULT_KEY.');
 </script>
 </body>
 </html>
