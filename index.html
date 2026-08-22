@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>KARGO Bot v3</title>
+<title>KARGO Bot v4</title>
 <style>
  body{margin:0;font-family:Segoe UI,Arial;background:#0b141a;display:flex;justify-content:center}
  #phone{width:100%;max-width:480px;display:flex;flex-direction:column;height:100vh}
@@ -23,10 +23,10 @@
 </head>
 <body>
 <div id="phone">
- <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v3 anti-bloqueo</small></div></header>
- <input id="aikey" placeholder="(Opcional) API Key gratis de Gemini → entiende CUALQUIER mensaje"/>
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v4 con IA gratis</small></div></header>
+ <input id="aikey" placeholder="(Opcional) Clave Gemini = refuerzo extra"/>
  <div id="chat"></div>
- <div id="bar"><input id="input" placeholder="Ej: del prado a obrajes"/><button id="send">➤</button></div>
+ <div id="bar"><input id="input" placeholder="Ej: cuanto de la vita a obrajes"/><button id="send">➤</button></div>
 </div>
 <script>
 const TARIFAS=[[1,9],[2,13],[3,16],[4,20],[5,23],[6,26],[7,30],[8,33],[9,36],[10,40],[15,55],[20,65]];
@@ -72,10 +72,14 @@ function addMsg(t,q){const d=document.createElement('div');d.className='msg '+q;
 function clearChips(){document.querySelectorAll('.chips').forEach(c=>c.remove());}
 function addChips(l){clearChips();const c=document.createElement('div');c.className='chips';l.forEach(([t,f])=>{const b=document.createElement('button');b.className='chip';b.textContent=t;b.onclick=()=>{c.remove();f();};c.appendChild(b);});chat.appendChild(c);chat.scrollTop=chat.scrollHeight;}
 
-/* 🔒 CONEXIÓN CON TIEMPO LÍMITE: nunca se congela */
 async function fetchT(url,opts={},ms=9000){
  const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);
  try{const r=await fetch(url,{...opts,signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.json();}
+ finally{clearTimeout(t);}
+}
+async function fetchTxt(url,ms=12000){
+ const c=new AbortController();const t=setTimeout(()=>c.abort(),ms);
+ try{const r=await fetch(url,{signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.text();}
  finally{clearTimeout(t);}
 }
 
@@ -107,11 +111,21 @@ async function resolver(v){
  if(!r)r={c:v[1],exact:false};
  cache[v[0]]=r;return r;
 }
-async function iaExtraer(texto,key){
- const p=`Extrae origen y destino de este delivery en La Paz, Bolivia. Responde SOLO JSON {"origen":"...","destino":"..."}. Mensaje: "${texto}"`;
+
+/* 🆕 IA GRATIS SIN CLAVE (Pollinations) */
+async function iaPollinations(t){
+ const prompt=`Extrae origen y destino de un delivery en La Paz, Bolivia. Responde UNICAMENTE JSON valido: {"origen":"...","destino":"..."}. Mensaje: "${t}"`;
+ const txt=await fetchTxt(`https://text.pollinations.ai/${encodeURIComponent(prompt)}`);
+ const m=txt.match(/\{[\s\S]*\}/);if(!m)throw 0;
+ return JSON.parse(m[0]);
+}
+/* Refuerzo opcional con clave Gemini */
+async function iaGemini(t,key){
+ const p=`Extrae origen y destino de este delivery en La Paz, Bolivia. Responde SOLO JSON {"origen":"...","destino":"..."}. Mensaje: "${t}"`;
  const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}]})});
  return JSON.parse(d.candidates[0].content.parts[0].text.match(/\{.*\}/s)[0]);
 }
+
 async function rutaKm(a,b){
  try{
   const d=await fetchT(`https://router.project-osrm.org/route/v1/driving/${a[1]},${a[0]};${b[1]},${b[0]}?overview=false`);
@@ -119,7 +133,7 @@ async function rutaKm(a,b){
  }catch(e){}
  const R=6371,dl=(b[0]-a[0])*Math.PI/180,dg=(b[1]-a[1])*Math.PI/180;
  const s=Math.sin(dl/2)**2+Math.cos(a[0]*Math.PI/180)*Math.cos(b[0]*Math.PI/180)*Math.sin(dg/2)**2;
- return 2*R*Math.asin(Math.sqrt(s))*1.3; /* 🪂 paracaídas: recta ×1.3 */
+ return 2*R*Math.asin(Math.sqrt(s))*1.3;
 }
 function tarifaKm(km){for(const[l,p]of TARIFAS)if(km<=l)return p;return 65+Math.ceil(km-20)*KM_EXTRA;}
 
@@ -146,14 +160,13 @@ async function procesar(texto){
    if(ro.c&&rd.c){o=ro.c;d=rd.c;exact=ro.exact&&rd.exact;nO=par[0].v[0];nD=par[1].v[0];}
   }
   if(!o){
-   const key=$('aikey').value.trim();
-   if(key){
-    const j=await iaExtraer(texto,key);
-    if(j&&j.origen&&j.destino){
-     const ro=await resolver([j.origen+', La Paz',null,'P']);
-     const rd=await resolver([j.destino+', La Paz',null,'P']);
-     if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=ro.exact&&rd.exact;}
-    }
+   let j=null;
+   try{j=await iaPollinations(texto);}catch(e){}
+   if(!j){const key=$('aikey').value.trim();if(key){try{j=await iaGemini(texto,key);}catch(e){}}}
+   if(j&&j.origen&&j.destino){
+    const ro=await resolver([j.origen+', La Paz',null,'P']);
+    const rd=await resolver([j.destino+', La Paz',null,'P']);
+    if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=ro.exact&&rd.exact;}
    }
   }
   t.remove();
@@ -171,7 +184,7 @@ async function procesar(texto){
 
 $('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
 $('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
-addMsg('¡Hola! 👋 Soy el bot KARGO v3 🛵\nYa no me congelo: prueba varias rutas seguidas.\n"del stadium de Miraflores a la piscina olímpica de alto obrajes"','bot');
+addMsg('¡Hola! 👋 Soy el bot KARGO v4 🛵\nAhora entiendo CUALQUIER lugar con IA gratis.\nPrueba: "cuanto de la vita a obrajes"','bot');
 </script>
 </body>
 </html>
