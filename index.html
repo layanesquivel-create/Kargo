@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>KARGO Bot v4</title>
+<title>KARGO Bot v5</title>
 <style>
  body{margin:0;font-family:Segoe UI,Arial;background:#0b141a;display:flex;justify-content:center}
  #phone{width:100%;max-width:480px;display:flex;flex-direction:column;height:100vh}
@@ -23,10 +23,10 @@
 </head>
 <body>
 <div id="phone">
- <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v4 con IA gratis</small></div></header>
+ <header><div class="ava">🛵</div><div><b>KARGO La Paz</b><br><small style="color:#8696a0">en línea · bot v5</small></div></header>
  <input id="aikey" placeholder="(Opcional) Clave Gemini = refuerzo extra"/>
  <div id="chat"></div>
- <div id="bar"><input id="input" placeholder="Ej: cuanto de la vita a obrajes"/><button id="send">➤</button></div>
+ <div id="bar"><input id="input" placeholder="Ej: de la camacho a la arce"/><button id="send">➤</button></div>
 </div>
 <script>
 const TARIFAS=[[1,9],[2,13],[3,16],[4,20],[5,23],[6,26],[7,30],[8,33],[9,36],[10,40],[15,55],[20,65]];
@@ -82,6 +82,15 @@ async function fetchTxt(url,ms=12000){
  try{const r=await fetch(url,{signal:c.signal});if(!r.ok)throw new Error(r.status);return await r.text();}
  finally{clearTimeout(t);}
 }
+/* Solo acepta puntos dentro de La Paz/El Alto */
+function enLaPaz(c){return c&&c[0]>-16.65&&c[0]<-16.40&&c[1]>-68.32&&c[1]<-68.02;}
+async function geoc(q){
+ try{
+  const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q+', La Paz, Bolivia')}`);
+  if(d.length){const c=[parseFloat(d[0].lat),parseFloat(d[0].lon)];if(enLaPaz(c))return{c,exact:true};}
+ }catch(e){}
+ return{c:null,exact:false};
+}
 
 function extraer(texto){
  const t=norm(texto);
@@ -99,27 +108,27 @@ function extraer(texto){
   if(O.length&&D.length)return[mejor(O),mejor(D)];}
  return[enc[0],enc[1]];
 }
+/* 🆕 PLAN B: entiende "de X a Y" y busca X y Y en el mapa, sin IA */
+function fragmentos(texto){
+ const t=norm(texto);
+ const m=t.match(/(?:desde|del|de|se)\s+([a-z0-9\s\.]{3,40}?)\s+(?:a|hasta)\s+([a-z0-9\s\.]{3,40})/);
+ if(!m)return null;
+ return[m[1].trim(),m[2].trim()];
+}
 
 const cache={};
 async function resolver(v){
  if(cache[v[0]])return cache[v[0]];
- let r=null;
- try{
-  const d=await fetchT(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(v[0]+', Bolivia')}`);
-  if(d.length)r={c:[parseFloat(d[0].lat),parseFloat(d[0].lon)],exact:true};
- }catch(e){}
- if(!r)r={c:v[1],exact:false};
+ let r=await geoc(v[0]);
+ if(!r.c)r={c:v[1],exact:false};
  cache[v[0]]=r;return r;
 }
-
-/* 🆕 IA GRATIS SIN CLAVE (Pollinations) */
 async function iaPollinations(t){
  const prompt=`Extrae origen y destino de un delivery en La Paz, Bolivia. Responde UNICAMENTE JSON valido: {"origen":"...","destino":"..."}. Mensaje: "${t}"`;
  const txt=await fetchTxt(`https://text.pollinations.ai/${encodeURIComponent(prompt)}`);
  const m=txt.match(/\{[\s\S]*\}/);if(!m)throw 0;
  return JSON.parse(m[0]);
 }
-/* Refuerzo opcional con clave Gemini */
 async function iaGemini(t,key){
  const p=`Extrae origen y destino de este delivery en La Paz, Bolivia. Responde SOLO JSON {"origen":"...","destino":"..."}. Mensaje: "${t}"`;
  const d=await fetchT(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:p}]}]})});
@@ -160,17 +169,23 @@ async function procesar(texto){
    if(ro.c&&rd.c){o=ro.c;d=rd.c;exact=ro.exact&&rd.exact;nO=par[0].v[0];nD=par[1].v[0];}
   }
   if(!o){
+   const fr=fragmentos(texto);
+   if(fr){
+    const[ro,rd]=await Promise.all([geoc(fr[0]),geoc(fr[1])]);
+    if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=fr[0];nD=fr[1];exact=true;}
+   }
+  }
+  if(!o){
    let j=null;
    try{j=await iaPollinations(texto);}catch(e){}
    if(!j){const key=$('aikey').value.trim();if(key){try{j=await iaGemini(texto,key);}catch(e){}}}
    if(j&&j.origen&&j.destino){
-    const ro=await resolver([j.origen+', La Paz',null,'P']);
-    const rd=await resolver([j.destino+', La Paz',null,'P']);
-    if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=ro.exact&&rd.exact;}
+    const[ro,rd]=await Promise.all([geoc(j.origen),geoc(j.destino)]);
+    if(ro.c&&rd.c){o=ro.c;d=rd.c;nO=j.origen;nD=j.destino;exact=true;}
    }
   }
   t.remove();
-  if(!o||!d){addMsg('🤔 No entendí las zonas. Ejemplo:\n"del prado a obrajes"\n"del stadium a la piscina olimpica"','bot');return;}
+  if(!o||!d){addMsg('🤔 No encontré esos lugares en el mapa.\nPrueba: "de la camacho a la arce"\n"del prado a obrajes"','bot');return;}
   const tt=addMsg(`🛣️ Calculando ruta ${nO} → ${nD}…`,'bot');
   const kmU=Math.round(await rutaKm(o,d)*10)/10;
   tt.remove();
@@ -178,13 +193,13 @@ async function procesar(texto){
   mostrarCot();
  }catch(e){
   t.remove();
-  addMsg('😅 La conexión con el mapa falló por un momento.\nEscribe tu consulta de nuevo, ya estoy listo. 💪','bot');
+  addMsg('😅 Falló la conexión un momento. Escribe tu consulta de nuevo. 💪','bot');
  }finally{busy=false;}
 }
 
 $('send').onclick=()=>{const v=$('input').value.trim();if(!v)return;$('input').value='';procesar(v);};
 $('input').onkeydown=e=>{if(e.key==='Enter')$('send').click();};
-addMsg('¡Hola! 👋 Soy el bot KARGO v4 🛵\nAhora entiendo CUALQUIER lugar con IA gratis.\nPrueba: "cuanto de la vita a obrajes"','bot');
+addMsg('¡Hola! 👋 Soy el bot KARGO v5 🛵\nAhora busco CUALQUIER calle o lugar en el mapa.\nPrueba: "cuanto de la camacho a la arce"','bot');
 </script>
 </body>
 </html>
